@@ -8,6 +8,47 @@ Author: Your Name
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// Simple markdown to HTML conversion function
+function openai_simple_markdown($text) {
+    // Escape HTML first
+    $text = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+    
+    // Convert markdown elements
+    $text = preg_replace('/\*\*(.*?)\*\*/', '<strong>$1</strong>', $text); // Bold
+    $text = preg_replace('/\*(.*?)\*/', '<em>$1</em>', $text); // Italic
+    $text = preg_replace('/`(.*?)`/', '<code class="bg-light px-1 rounded">$1</code>', $text); // Inline code
+    
+    // Convert line breaks to paragraphs
+    $paragraphs = explode("\n\n", $text);
+    $formatted_paragraphs = array();
+    
+    foreach ($paragraphs as $paragraph) {
+        $paragraph = trim($paragraph);
+        if (!empty($paragraph)) {
+            // Handle lists
+            if (preg_match('/^[\d\-\*\+]\s/', $paragraph)) {
+                $lines = explode("\n", $paragraph);
+                $list_items = array();
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if (preg_match('/^[\d\-\*\+]\s(.+)/', $line, $matches)) {
+                        $list_items[] = '<li>' . trim($matches[1]) . '</li>';
+                    }
+                }
+                if (!empty($list_items)) {
+                    $formatted_paragraphs[] = '<ul class="mb-2">' . implode('', $list_items) . '</ul>';
+                }
+            } else {
+                // Regular paragraph with line breaks
+                $paragraph = str_replace("\n", '<br>', $paragraph);
+                $formatted_paragraphs[] = '<p class="mb-2">' . $paragraph . '</p>';
+            }
+        }
+    }
+    
+    return implode('', $formatted_paragraphs);
+}
+
 // 1) Register a settings field for the API key
 add_action( 'admin_init', function() {
     register_setting( 'openai_chat_settings', 'openai_api_key' );
@@ -35,7 +76,7 @@ add_action( 'admin_menu', function() {
 
 // 2) Enqueue JS and localize AJAX URL + nonce
 add_action( 'wp_enqueue_scripts', function(){
-    wp_enqueue_script( 'openai-chat', plugin_dir_url(__FILE__).'openai.js', ['jquery'], null, true );
+    wp_enqueue_script( 'openai-chat', plugin_dir_url(__FILE__).'openai.js', ['jquery'], '1.0.2', true );
     wp_localize_script( 'openai-chat', 'OpenAIChat',
         ['ajax_url' => admin_url('admin-ajax.php'),
          'nonce'    => wp_create_nonce('openai_chat_nonce')]
@@ -45,7 +86,8 @@ add_action( 'wp_enqueue_scripts', function(){
 // 3) Shortcode to render the chat UI
 add_shortcode( 'openai_chat', function(){
     ob_start(); ?>
-        <div class="card tab-content flex-1 phoenix-offcanvas-container">
+    <div class="col-xl-8">
+        <div class="card tab-content flex-1 phoenix-offcanvas-container openai-chat-container">
           <!-- Chat pane -->
           <div class="tab-pane h-100 fade active show d-flex flex-column">
             
@@ -63,7 +105,7 @@ add_shortcode( 'openai_chat', function(){
               </div>
 
               <!-- Action buttons -->
-              <div class="d-flex">
+              <!-- <div class="d-flex">
                 <button class="btn btn-icon btn-phoenix-primary me-1">
                   <i class="fas fa-phone"></i>
                 </button>
@@ -80,13 +122,23 @@ add_shortcode( 'openai_chat', function(){
                     <li><a class="dropdown-item" href="#">Help</a></li>
                   </ul>
                 </div>
-              </div>
+              </div> -->
             </div>
 
             <!-- Messages -->
             <div class="card-body flex-grow-1 p-3 overflow-auto phoenix-scrollbar">
-              <!-- Bot response appended here -->
-              <pre id="openai-response" class="mb-0"></pre>
+              <!-- Loading spinner -->
+              <div id="openai-loading" class="d-none text-center py-4">
+                <div class="spinner-border text-primary" role="status">
+                  <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2 text-muted">AI is thinking...</p>
+              </div>
+              
+              <!-- Chat messages container -->
+              <div id="openai-messages" class="d-flex flex-column gap-3">
+                <!-- Messages will be appended here -->
+              </div>
             </div>
 
             <!-- Input -->
@@ -121,6 +173,7 @@ add_shortcode( 'openai_chat', function(){
             </ul>
           </div>
         </div>
+    </div>
     <?php
     return ob_get_clean();
 });
@@ -157,7 +210,9 @@ foreach ( [ 'wp_ajax', 'wp_ajax_nopriv' ] as $action ) {
 
         $body = json_decode( wp_remote_retrieve_body($response), true );
         if ( isset($body['choices'][0]['message']['content']) ) {
-            wp_send_json_success( trim($body['choices'][0]['message']['content']) );
+            $content = trim($body['choices'][0]['message']['content']);
+            $formatted_content = openai_simple_markdown($content);
+            wp_send_json_success( $formatted_content );
         } else {
             wp_send_json_error( 'Unexpected API response.' );
         }
